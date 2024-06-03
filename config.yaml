@@ -1,18 +1,18 @@
 # The scope where the PAT is stored
-DATABRICKS_TOKEN_SECRET_SCOPE: 'fieldeng'
+DATABRICKS_TOKEN_SECRET_SCOPE: "sql_migration_tool"
 # The key underwhich the PAT is stored
-DATABRICKS_TOKEN_SECRET_KEY: 'rgwhiffin'
+DATABRICKS_TOKEN_SECRET_KEY: "Kris_Token" 
 # The Vector Search endpoint which will host the index
-VECTOR_SEARCH_ENDPOINT_NAME: 'one-env-shared-endpoint-4'
+VECTOR_SEARCH_ENDPOINT_NAME: "sqltranslation"
 # the fully qualified name of the VS index "<catalog>.<schema>.<index_name>"
-VS_INDEX_FULLNAME : "robert_whiffin.dfe_code_assistant.code_intent_vs_index"
+VS_INDEX_FULLNAME : "catalog_40_copper_post16_assurance_analysis.sql_translation.code_intent_vsindex"
 # the fully qualified name of table which backs the VS index "<catalog>.<schema>.<table_name>"
-INTENT_TABLE: "robert_whiffin.dfe_code_assistant.code_intent_table"
+INTENT_TABLE: "catalog_40_copper_post16_assurance_analysis.sql_translation.code_intent_table"
 # the http path from the connection details of a SQL Warehouse. 
-SQL_WAREHOUSE_HTTP_PATH: "/sql/1.0/warehouses/d1184b8c2a8a87eb"
-# hostname of the databricks workspaces - DO NOT PUT A TRAILING /
-DATABRICKS_HOST: "adb-984752964297111.11.azuredatabricks.net"
+SQL_WAREHOUSE_HTTP_PATH: "/sql/1.0/warehouses/5686c1267b256037"
+# hostname of the databricks workspaces
+DATABRICKS_HOST: "adb-2220072380334347.7.azuredatabricks.net"
 # the served model to use. This needs to be a chat model (e.g. one ending in -instruct)
-SERVED_MODEL_NAME: "databricks-meta-llama-3-70b-instruct"
+SERVED_MODEL_NAME: "dbrx_endpoint"
 # how many tokens is the model allowed to generate. 
-MAX_TOKENS: 4096
+MAX_TOKENS: 4000
