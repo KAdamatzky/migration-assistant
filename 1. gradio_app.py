@@ -2,7 +2,6 @@ import yaml
 import gradio as gr
 from openai import OpenAI
 import os
-
 import gradio as gr
 from databricks import sql
 from databricks.vector_search.client import VectorSearchClient
@@ -14,10 +13,16 @@ logging.basicConfig
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
-# # personal access token necessary for authenticating API requests. Stored using a secret
+################################################################################
+# DATABRICKS INFO
+################################################################################
+# Personal access token necessary for authenticating API requests. Stored using a secret
 DATABRICKS_TOKEN = os.environ["DATABRICKS_TOKEN"]
 #DATABRICKS_HOST = os.environ["DATABRICKS_HOST"] # Not currently used. 
 
+################################################################################
+# VECTOR EMBEDDING SET UP
+################################################################################
 # details on the vector store holding the similarity information
 vsc = VectorSearchClient(  
     workspace_url = "https://" + os.environ["DATABRICKS_HOST"],
@@ -28,7 +33,9 @@ VECTOR_SEARCH_ENDPOINT_NAME = os.environ["VECTOR_SEARCH_ENDPOINT_NAME"]
 vs_index_fullname= os.environ["VS_INDEX_FULLNAME"]
 intent_table = os.environ["INTENT_TABLE"]
 
-# details for connecting to the llm endpoint
+################################################################################
+# LLM SET UP
+################################################################################
 
 # the URL of the serving endpoint
 MODEL_SERVING_ENDPOINT_URL = f"https://{os.environ['DATABRICKS_HOST']}/serving-endpoints"
@@ -37,6 +44,10 @@ client = OpenAI(
   api_key=DATABRICKS_TOKEN,
   base_url=MODEL_SERVING_ENDPOINT_URL
 )
+
+################################################################################
+# SQL SET UP
+################################################################################
 
 # create a connection to the sql warehouse
 connection = sql.connect(
@@ -51,9 +62,6 @@ def execute_sql(cursor, sql):
     cursor.execute(sql)
     return cursor.fetchall()
     
-################################################################################
-################################################################################
-
 ################################################################################
 # CHAT USED DURING TRANSLATION
 ################################################################################
@@ -87,7 +95,20 @@ translation_attempts = 1 # Used in the 'translation chain' to keep track of how 
 
 iteration_limit = 3 # Maximum number of translation attempts.
 
-use_metadata = False 
+################################################################################
+# CHAT USED DURING INTENT
+################################################################################
+
+original_intent_system_prompt = "Your job is to explain the intent of this SQL code."
+
+intent_system_prompt = original_intent_system_prompt
+
+intent_chat = [
+    {"role": "system", "content": intent_system_prompt}
+]
+
+# Bool for whether llm_intent is generating intent for the first time or refining the original intent
+refine_bool = False
 
 ################################################################################
 # LLM TRANSLATION OF SQL CODE
@@ -179,8 +200,7 @@ def translation_chain(sql_query):
         fix_code_prompt = rules + "The following Databricks Spark SQL query contains an error. Please fix it without including any explanation or other text except for the query. Ensure there are none of the following symbols: # @ \\ / (hash, at sign, backward slash, forward slash)"
         
         translation_attempts += 1
-        logger.warning(f"Translation attempts: {translation_attempts}")
-        #gr.Info(f"Translation was inavlid. Re-trying. Attempt {translation_attempts}")
+        logger.warning(f"Translation attempts: {translation_attempts}") # For debugging to see if translation attempts are being made or LLM is timing out
 
         # Resets chat history so it only contains new system prompt and LLM's original answer
         translation_chat = [
@@ -206,95 +226,45 @@ def translation_chain(sql_query):
 # FUNCTIONS FOR  INTENT
 ################################################################################
 
-def llm_intent(#metadata_prompt, 
-               no_metadata_prompt, 
-               sql_query):
-    if(use_metadata):
-        table_descriptions = build_table_metadata(sql_query)
+def llm_intent(sql_query = None):
+    
+    global intent_chat, intent_system_prompt
+    # build the query prompt by adding code and metadata descriptions
+    system_prompt = intent_system_prompt
 
-        if table_descriptions:
-            # set the system prompt
-            system_prompt = metadata_prompt
-            # build the query prompt by adding code and metadata descriptions
-            query_prompt = f"This is the SQL code: {sql_query}. \n\n{table_descriptions}"
-    else:
-        system_prompt = no_metadata_prompt
-        # build the query prompt by adding code and metadata descriptions
-        query_prompt = f"This is the SQL code: {sql_query}"
+    if(refine_bool == False):
+        intent_chat.append({"role": "user", "content": f"This is the SQL code: {sql_query}"})
 
     # call the LLM end point.
     chat_completion = client.chat.completions.create(
-        messages=[
-        {"role": "system", "content": system_prompt}
-        ,{"role": "user",  "content": query_prompt}
-        ],
+        messages=intent_chat,
         model=os.environ["SERVED_MODEL_NAME"],
         max_tokens=int(os.environ["MAX_TOKENS"])
     )
 
-    # helpful for debugging -show the query sent to the LLM        
-    #return [chat_completion.choices[0].message.content, query_prompt]
-    # this is the return without the chat interface
-    #return chat_completion.choices[0].message.content
-    # this is the return for the chatbot - empty string to fill in the msg, list of lists for the chatbot
-    return "", [[query_prompt, chat_completion.choices[0].message.content]]
-# this is called to actually send a request and receive response from the llm endpoint.
-def call_llm_for_chat(chat_history, 
-                      query, 
-                      #metadata_prompt, 
-                      no_metadata_prompt, 
-                      sql_query):
-    if(use_metadata):
-        table_descriptions = build_table_metadata(sql_query)
-
-        if table_descriptions:
-            # set the system prompt
-            system_prompt = metadata_prompt
-            # build the query prompt by adding code and metadata descriptions
-            query_prompt = f"This is the SQL code:\n{sql_query}. \n\n{table_descriptions}"
-    else:
-        system_prompt = no_metadata_prompt
-        # build the query prompt by adding code and metadata descriptions
-        query_prompt = f"This is the SQL code: {sql_query}"
-
-    #system_prompt = "You are a chatbot which helps users explain the intent of their code."
-    messages=[
-        {"role": "system", "content": system_prompt}
-        ] 
-    for q, a in chat_history:
-      messages.extend(
-        [{"role": "user",  "content": q}
-        ,{"role": "assistant",  "content": a}]
-        )
-    messages.append(
-        {"role": "user",  "content": query})
-    
-    chat_completion = client.chat.completions.create(
-        messages=messages,
-        model=os.environ["SERVED_MODEL_NAME"],
-        max_tokens=int(os.environ["MAX_TOKENS"])
-    )
     return chat_completion.choices[0].message.content
     
 ################################################################################
+# SAVING INTENT AND CODE
 ################################################################################
 # this writes the code & intent into the lookup table
 def save_intent(code, intent):
     code_hash = hash(code) # Change to combination of code + intent?    
-    intent = intent[0][-1] # Extracts just the intent explanation, without the mention of original code
+    intent = intent.replace("\"", "\'") # Replace any double quotation marks with single quotations to avoid syntax errors when writing to table.
     logger.warning(f"Intent: {intent}")
-
+    
     existing_id = execute_sql(cursor, f"SELECT id FROM {intent_table} WHERE id = {code_hash}")
-
+    
     logger.warning(existing_id)
 
     if not existing_id:
-        cursor.execute(f"INSERT INTO {intent_table} VALUES ({code_hash}, \"{code}\", \'{intent}\')")
+        cursor.execute(f"INSERT INTO {intent_table} VALUES ({code_hash}, \"{code}\", \"{intent}\")")
         gr.Info("Code and intent saved to catalog")
     else:
         raise gr.Error("Identical code found in the table")
 
 ################################################################################
+# FINDING SIMILAR CODE
 ################################################################################
 # this does a look up on the vector store to find the most similar code based on the intent
 def get_similar_code(intent):    
@@ -309,12 +279,14 @@ def get_similar_code(intent):
     return(docs[0][0], docs[0][1])
 
 ################################################################################
+# REFINING CODE BASED ON USER REQUESTS
 ################################################################################
 # Function for refining LLM output based on user request.
 def refine_code(refine_msg, input_code, translated_code):    
     global translation_chat, translation_attempts
+
     new_system_prompt = f"Please improve the translation according to the user request.Only respond with a SQL query. Any comments must be commented using -- \n The original input code was:{input_code}\n Your translated code is:{translated_code}"
-    #prompt = f"Please improve the translation according to the user request.\n The original input code was:{input_code}\n Your translated code is:{translated_code},\n User's refinement request: {refine_msg}"
+
     translation_chat = [
             {"role": "system", "content": new_system_prompt},
             {"role": "user",  "content": refine_msg}
@@ -325,25 +297,47 @@ def refine_code(refine_msg, input_code, translated_code):
     #new_code = translation_chain(prompt)
     return(new_code)
    
+# Function for refining LLM-generated intent 
+def refine_intent(refine_msg, intent):
+    global intent_chat, refine_bool
+    refine_bool = True
+    intent_chat.extend([{"role": "assistant", "content": intent},
+                        {"role": "user", "content": refine_msg}])
+    new_intent = llm_intent()
+    return(new_intent)
+
 
 ################################################################################
+# FUNCTIONS FOR BUTTONS
 ################################################################################
+# Resets intent chat back to just the system prompt
+def reset_intent_chat():
+    global intent_chat, intent_system_prompt, refine_bool
+    intent_chat = [
+    {"role": "system", "content": intent_system_prompt}
+    ]
+    refine_bool = False
+   
 
-#Allows user to upload .sql file      
+# Allows user to upload .sql file. Does not currently work when hosted through dbtunnel      
 def read_sql_file(path):
     logger.warning("Reading uploaded file...{path}")
     with open(path.name) as fd:
         sql_code = fd.read()
     return(sql_code)
+
 ################################################################################
+# POP UPS (Separate functions so can be used sequentially and be optional)
 ################################################################################
 def saving_popup():
     gr.Info("Saving code and intent...")
-################################################################################
-################################################################################
 
+def intent_reset_popup():
+    gr.Info("Intent chat reset")
+
+################################################################################
 # GRADIO UI
-
+################################################################################
 # this is the app UI. it uses gradio blocks https://www.gradio.app/docs/gradio/blocks
 # each gr.{} call adds a new element to UI, top to bottom. 
 
@@ -371,53 +365,32 @@ This application uses the DBRX-instruct LLM model to translate Transact SQL quer
 ################################################################################
     with gr.Accordion(label="Advanced Translation Settings", open=False):
         with gr.Column():
-            # select SQL flavour
-            """
-            sql_flavour = gr.Dropdown(
-                label = "Input SQL Type. Select SQL if unknown."
-                ,choices = [
-                     ("SQL", 'sql')
-                    ,("Transact SQL", 'sql-msSQL')
-                    ,("MYSQL"       , 'sql-mySQL')
-                    ,("SQLITE"      , 'sql-sqlite')
-                    ,("PL/SQL"      , 'sql-plSQL')
-                    ,("HiveQL"      , 'sql-hive')
-                    ,("PostgreSQL"  , 'sql-pgSQL')
-                    ,("Spark SQL"   , 'sql-sparkSQL')
-                    ]
-                ,value="sql-msSQL"
-            )
-            
-            # this function updates the code formatting box to use the selected sql flavour
-            def update_input_code_box(language):
-                input_code = gr.Code(
-                    label="Input SQL"
-                    ,language=language
-                    )
-                return input_code
-            """
             with gr.Row():
-
+                
+                # Textbox for editing translation system prompt
                 system_prompt_box = gr.Text(
                     label = "Add/remove instructions for the LLM here.",
                     value = translation_system_prompt,
                     lines = 10
                 )
 
+                # Slider to set maximum number of re-translation attempts
                 max_iterations = gr.Slider(1, 10, value = 3, step = 1, label = "Maximum re-translation iterations", info = "Choose the number of translation iterations the LLM will perform if the original translation is syntactically invalid.")
 
+            # Functions for updating and reseting translation system prompts
             def update_system_prompt(changed_prompt):
                 global translation_system_prompt
                 translation_system_prompt = changed_prompt
-                gr.Info("System prompt updated.")
+                gr.Info("Translation prompt updated.")
                 return(translation_system_prompt)
             
             def reset_system_prompt():
                 global translation_system_prompt
                 translation_system_prompt = original_translation_system_prompt
-                gr.Info("System prompt reset.")
+                gr.Info("Translation system prompt reset.")
                 return(translation_system_prompt)
             
+            # Function for updating the maximum number of re-translation attempts
             def update_max_iterations(iterations):
                 global iteration_limit
                 iteration_limit = iterations
@@ -425,18 +398,11 @@ This application uses the DBRX-instruct LLM model to translate Transact SQL quer
                 pass
 
             
-
             with gr.Row():
-                update_prompt_btn = gr.Button("Update system prompt")
-                reset_prompt_btn = gr.Button("Reset system prompt")
-            
-            # Re-enable once uploading is figured out
-            #upload_btn = gr.UploadButton("Upload a SQL file (currently does not work on Databricks)", file_types = ['.sql'], file_count="single") 
-
-            #file_output = gr.File() # Used to test upload capabilities. Does not work when hosted using dbtunnel but works otherwise.
-
-            #uploaded_sql = gr.Code("")
+                update_prompt_btn = gr.Button("Update translation prompt")
+                reset_prompt_btn = gr.Button("Reset translation prompt")
         
+        # Button behaviours
         update_prompt_btn.click(fn = update_system_prompt, inputs = system_prompt_box, outputs = system_prompt_box)
         reset_prompt_btn.click(fn = reset_system_prompt, outputs = system_prompt_box)
         max_iterations.input(update_max_iterations, max_iterations)
@@ -459,15 +425,12 @@ This application uses the DBRX-instruct LLM model to translate Transact SQL quer
                 # input box for SQL code with nice formatting
                 input_code = gr.Code(
                         label="Input SQL"
-                        ,language='sql-msSQL' # Does this need to be changed to `sql_flavour` if that option is re-enabled?
+                        ,language='sql-msSQL' 
                         ,value=""
                         )
                 
                 translate_button = gr.Button("Translate") 
-
-            # the input code box gets updated when a user changes a setting in the Advanced section
-                #sql_flavour.input(update_input_code_box, sql_flavour, input_code)
-            
+          
             with gr.Column():
                 # divider subheader
                 gr.Markdown(""" ### Your Code Translated to Spark-SQL""")
@@ -479,22 +442,19 @@ This application uses the DBRX-instruct LLM model to translate Transact SQL quer
                     )
                 
                 # Input for additional refinement of code. This request is sent back to the translation chain along with the original code translation.
-                refine = gr.Text(label = "Refine the translated code",
-                                 value = "",
-                                 lines = 2)
-                
-                refine_button = gr.Button("Refine code")
+                refine = gr.Textbox(label = "Refine the translated code",
+                                 info = "Enter any changes you would like the LLM to make to the translated query")
         
         def reset_translation_attempts():
             global translation_attempts
 
             translation_attempts = 1
         
-        # Button behaviours
+        # Button and textbox behaviours
         #upload_btn.upload(read_sql_file, upload_btn, input_code) # Re-enable once uploading is figured out
         translate_button.click(fn=reset_translation_attempts)
         translate_button.click(fn=translation_chain, inputs=input_code, outputs=translated)
-        refine_button.click(fn = refine_code, inputs = [refine, input_code, translated], outputs = translated)
+        refine.submit(fn = refine_code, inputs = [refine, input_code, translated], outputs = translated)
         
         
 ################################################################################
@@ -502,39 +462,36 @@ This application uses the DBRX-instruct LLM model to translate Transact SQL quer
 ################################################################################
     with gr.Accordion(label="Advanced Intent Settings", open=False):
         with gr.Column():
-            # select whether to use table metadata    
-            '''
-            use_table_metadata = gr.Checkbox(
-                label = "Use table metadata if available (currently not working)",
-                value = False,
-                interactive = True
-            )
-            '''
             # Sets the system prompt differently depending on if user selects the use of metadata.
             with gr.Row():
-                '''
-                llm_sys_prompt_metadata = gr.Textbox(
-                    label="System prompt for LLM to generate code intent if table metadata present."
-                    ,value="""
-                        Your job is to explain the intent of a SQL query. You are provided with the SQL Code and a summary of the information contained within the tables queried, and details about which columns are used from which table in the query. From the information about the tables and columns, you will infer what the query is intending to do.
-                        """.strip(),
-                    lines = 3
-                    )
-                '''
-                llm_sys_prompt_no_metadata = gr.Textbox(
-                    label="System prompt for LLM to generate code intent."
-                    ,value="""
-                        Your job is to explain the intent of this SQL code.
-                        """.strip(),
+              
+                intent_prompt = gr.Text(
+                    label="System prompt for LLM to generate code intent.",
+                    value=intent_system_prompt,
                     lines = 3
                     )
                 
-                def switch_metadata_bool(bool):
-                    global use_metadata
-                    use_metadata = bool
+                def update_intent_prompt(changed_prompt):
+                    global intent_system_prompt
+                    intent_system_prompt = changed_prompt
+                    gr.Info("Intent system prompt updated.")
+                    return(intent_system_prompt)
+            
+                def reset_intent_prompt():
+                    global intent_system_prompt
+                    intent_system_prompt = original_intent_system_prompt
+                    gr.Info("Intent system prompt reset.")
+                    return(intent_system_prompt)
+                
+            with gr.Row():
+                update_intent_prompt_btn = gr.Button("Update intent prompt")
+                reset_intent_prompt_btn = gr.Button("Reset intent prompt")
 
-                #use_table_metadata.change(fn = switch_metadata_bool, inputs = use_table_metadata)
-        
+        # Button behaviours
+        update_intent_prompt_btn.click(fn = update_intent_prompt, inputs = intent_prompt, outputs = intent_prompt)
+        reset_intent_prompt_btn.click(fn = intent_reset_popup, outputs = intent_prompt)
+        reset_intent_prompt_btn.click(fn = reset_intent_prompt, outputs = intent_prompt)
+            
 ################################################################################
 #### AI GENERATED INTENT PANE
 ################################################################################
@@ -545,64 +502,43 @@ This application uses the DBRX-instruct LLM model to translate Transact SQL quer
     with gr.Accordion(label="Intent Pane", open=True):
         gr.Markdown(""" ## AI generated intent of what your code aims to do. 
                     
-                    Intent is determined by an LLM which uses the **input** code. You may edit the LLM prompt for generating intent in the `Advanced Intent Settings` pane.""")
-        # a box to give the LLM generated intent of the code. This is editable as well. 
-        explain_button = gr.Button("Explain code intent using AI")
-        explained = gr.Textbox(label="AI generated intent of your code.", visible=False)
-
-        chatbot = gr.Chatbot(
-            label = "AI Chatbot for Intent Extraction"
-            ,height="70%"
-            )
+                    Intent is determined by an LLM which uses the **input** code. You may edit the LLM prompt for generating intent in the `Advanced Intent Settings` pane.
+                    
+                    ***If the intent is incorrect, please edit***. Once you are happy that the description is correct, please click the button below to save the intent. This will help the Department by making it easier to identify duplication of what people are doing.""")
         
-        msg = gr.Textbox(label="Chat", info = "Input any additional instructions for the intent description here and the LLM will re-generate the intent.")
-        clear = gr.ClearButton([msg, chatbot], value = "Clear chat")
+        explain_button = gr.Button("Explain code intent using AI")
+
+        # Textbox for LLM generated intent of the code. This is editable as well. 
+        explained = gr.Textbox(label="AI generated intent of your code.")
+
+        # Input for refining generated intent 
+        msg = gr.Textbox(label="Refine intent", info = "Input any additional instructions for the intent description here and the LLM will re-generate the intent.")
+
+        # Button for clearing generated intent and user message boxes
+        clear = gr.ClearButton([explained, msg], value = "Reset chat")
+
+        # Button for saving code intent
         submit = gr.Button("Save code and intent")
 
-        def user(user_message, history):
-            return "", history + [[user_message, None]]
-
-        def respond(chat_history, 
-                    message, 
-                    #metadata_prompt, 
-                    no_metadata_prompt, 
-                    sql_query):                
-            bot_message = call_llm_for_chat(chat_history, 
-                                            message, 
-                                            #metadata_prompt, 
-                                            no_metadata_prompt, 
-                                            sql_query)
-            
-            chat_history.append([message, bot_message])
-            return "", chat_history
-        
+        # When user clicks the 'Explained' button, the intent chat is reset and llm_intent is fed the input code
+        explain_button.click(reset_intent_chat)
         explain_button.click(
-            fn=llm_intent
-            , inputs=[
-                #llm_sys_prompt_metadata,
-                llm_sys_prompt_no_metadata
-                , input_code 
-                ]
-            , outputs=[msg, chatbot]
-            
+            fn=llm_intent,
+            inputs=input_code,
+            outputs=explained
             )
-        # msg.submit(user, [msg, chatbot], [msg, chatbot], queue=False).then(
-        #     respond, chatbot, chatbot
-        # )
+        
+        # When a user presses enter in the 'Refine intent' box, the 'refine_intent' function is called and explained intent box is updated.
         msg.submit(
-            fn=respond
-            ,inputs = [
-                chatbot,
-                msg,
-                #llm_sys_prompt_metadata,
-                llm_sys_prompt_no_metadata,
-                input_code 
-                ],
-            outputs= [msg, chatbot]
+            fn = refine_intent,
+            inputs = [explained, msg],
+            outputs = explained
         )
         
+        # Button behaviours
+        clear.click(fn = reset_intent_chat)
         submit.click(saving_popup) 
-        submit.click(save_intent, inputs=[input_code, chatbot]) # Maybe use translated code instead of input
+        submit.click(save_intent, inputs=[input_code, explained]) # Maybe use translated code instead of input
 
 ################################################################################
 #### SIMILAR CODE PANE
@@ -621,17 +557,17 @@ This application uses the DBRX-instruct LLM model to translate Transact SQL quer
                 label="Similar code to yours."
                 ,language="sql-sparkSQL"
                 )
-            similar_intent = gr.Textbox(label="The similar codes intent.")
-
-        
-
+            similar_intent = gr.Textbox(label="The similar codes intent.")      
         
     find_similar_code.click(
         fn=get_similar_code
-        , inputs=chatbot
+        , inputs=explained
         , outputs=[similar_code, similar_intent])
     
-    
+
+################################################################################
+#### RUNNING THE APP
+################################################################################
 # this is necessary to get the app to run 
 if __name__ == "__main__":
     demo.queue().launch(
