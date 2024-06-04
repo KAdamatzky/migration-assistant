@@ -66,23 +66,23 @@ def execute_sql(cursor, sql):
 # CHAT USED DURING TRANSLATION
 ################################################################################
 
-rules = """You are an expert in multiple SQL dialects. 
-    You may only reply with SQL code with no other text. 
-    References to a schema within a catalog are in the format catalog.schema. For example: `catalog_name`.`schema_name` when 'catalog_name' is the catalog and 'schema_name' is the schema. The catalog and schema MUST be surrounded with SEPARATE pairs of backticks, e.g.: `catalog_name`.`schema_name` NOT `catalog_name.schema_name`.
-    You must keep all original catalog, schema, table, and field names.
-    Convert all dates to dd-MMM-yyyy format using the date_format() function. 
-    The date_format() function should not be surrounded by backticks.
-    Subqueries must end with a semicolon.
-    ONLY if the original query uses temporary tables (e.g. "INTO #temptable"), re-write these as either CREATE OR REPLACE TEMPORARY VIEW or CTEs. 
-    Custom field names should be surrounded by backticks.
-    Square brackets must also be replaced with backticks.
-    Only if the original query contains DECLARE and SET statements, re-write them according to the following format:
+rules = """You are an expert in multiple SQL dialects. You must follow these rules:
+    - You may only reply with SQL code with no other text. 
+    - References to a schema within a catalog are in the format catalog.schema. For example: `catalog_name`.`schema_name` when 'catalog_name' is the catalog and 'schema_name' is the schema. The catalog and schema MUST be surrounded with SEPARATE pairs of backticks, e.g.: `catalog_name`.`schema_name` NOT `catalog_name.schema_name`.
+    - You must keep all original catalog, schema, table, and field names.
+    - Convert all dates to dd-MMM-yyyy format using the date_format() function. 
+    - The date_format() function should not be surrounded by backticks.
+    - Subqueries must end with a semicolon.
+    - ONLY if the original query uses temporary tables (e.g. "INTO #temptable"), re-write these as either CREATE OR REPLACE TEMPORARY VIEW or CTEs. 
+    - Custom field names should be surrounded by backticks.
+    - Square brackets must also be replaced with backticks.
+    - Only if the original query contains DECLARE and SET statements, re-write them according to the following format:
         DECLARE VARIABLE variable TYPE DEFAULT value; For example: DECLARE VARIABLE number INT DEFAULT 9;
         SET VAR variable = value; For example: SET VAR number = 9;
-    Ensure queries do not have # or @ symbols. 
-    """
+    - Ensure queries do not have # or @ symbols. 
+    """.strip()
 
-original_translation_system_prompt = rules + "\nPlease translate the following Transact SQL query to Databricks Spark SQL:"
+original_translation_system_prompt = rules + "\nTranslate the following Transact SQL query to Databricks Spark SQL:"
 
 translation_system_prompt = original_translation_system_prompt
 
@@ -268,7 +268,7 @@ def save_intent(code, intent):
 ################################################################################
 # this does a look up on the vector store to find the most similar code based on the intent
 def get_similar_code(intent):    
-    intent = intent[0][-1] # Extracts just the intent explanation, without the mention of original code
+    #intent = intent[0][-1] # Extracts just the intent explanation, without the mention of original code
     
     #results = vsc.get_index(VECTOR_SEARCH_ENDPOINT_NAME, vs_index_fullname).similarity_search(
     results = vsc.get_index("", vs_index_fullname).similarity_search(
@@ -285,7 +285,7 @@ def get_similar_code(intent):
 def refine_code(refine_msg, input_code, translated_code):    
     global translation_chat, translation_attempts
 
-    new_system_prompt = f"Please improve the translation according to the user request.Only respond with a SQL query. Any comments must be commented using -- \n The original input code was:{input_code}\n Your translated code is:{translated_code}"
+    new_system_prompt = f"Please improve the translation according to the user request. Only respond with a SQL query. Any comments must be commented using -- \n The original input code was:{input_code}\n Your translated code is:{translated_code}"
 
     translation_chat = [
             {"role": "system", "content": new_system_prompt},
@@ -352,7 +352,7 @@ with gr.Blocks(theme = 'zenafey/zinc') as demo:
     gr.Markdown("""<img align="right" src="https://asset.brandfetch.io/idSUrLOWbH/idm22kWNaH.png" alt="logo" width="120">
 
 # SQL Migration Tool
-### A context aware migration assistant for converting T-SQL (Microsoft SQL Server) code to Spark SQL and describing query intent
+### An AI assistant for converting T-SQL (Microsoft SQL Server) code to Spark SQL and describing query intent
 
 This application uses the DBRX-instruct LLM model to translate Transact SQL queries into Spark SQL format for use in the Databricks environment. Additionally, the LLM model can describe the intent of your query and find code with similar intent submitted by other analysts. 
 \nIf you are happy with the code and intent generated, please press the `Save code and intent` button as this will enhance the `Find similar code` feature and help other users. 
