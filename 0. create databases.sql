@@ -234,9 +234,24 @@ INSERT INTO dependents(dependent_id,first_name,last_name,relationship,employee_i
 
 -- COMMAND ----------
 
+-- Just for T-SQL
 create or replace table code_intent_table (
     id BIGINT,
     code STRING,
     intent STRING
 
+);
+
+
+-- COMMAND ----------
+
+-- Contains T-SQL AND Spark SQL
+--USE CATALOG ${catalog_40_copper_post16_assurance_analysis};
+USE SCHEMA ${sql_translation};
+
+CREATE OR REPLACE TABLE both_code_intent_table (
+    id BIGINT,
+    t_sql_code STRING,
+    spark_sql_code STRING,
+    intent STRING
 );

@@ -5,9 +5,9 @@ DATABRICKS_TOKEN_SECRET_KEY: "Kris_Token"
 # The Vector Search endpoint which will host the index
 VECTOR_SEARCH_ENDPOINT_NAME: "sqltranslation"
 # the fully qualified name of the VS index "<catalog>.<schema>.<index_name>"
-VS_INDEX_FULLNAME : "catalog_40_copper_post16_assurance_analysis.sql_translation.code_intent_vsindex"
+VS_INDEX_FULLNAME : "catalog_40_copper_post16_assurance_analysis.sql_translation.both_code_intent_table_vsindex"
 # the fully qualified name of table which backs the VS index "<catalog>.<schema>.<table_name>"
-INTENT_TABLE: "catalog_40_copper_post16_assurance_analysis.sql_translation.code_intent_table"
+INTENT_TABLE: "catalog_40_copper_post16_assurance_analysis.sql_translation.both_code_intent_table"
 # the http path from the connection details of a SQL Warehouse. 
 SQL_WAREHOUSE_HTTP_PATH: "/sql/1.0/warehouses/5686c1267b256037"
 # hostname of the databricks workspaces

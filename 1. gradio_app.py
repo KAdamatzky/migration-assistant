@@ -67,19 +67,19 @@ def execute_sql(cursor, sql):
 ################################################################################
 
 rules = """You are an expert in multiple SQL dialects. You must follow these rules:
-    - You may only reply with SQL code with no other text. 
-    - References to a schema within a catalog are in the format catalog.schema. For example: `catalog_name`.`schema_name` when 'catalog_name' is the catalog and 'schema_name' is the schema. The catalog and schema MUST be surrounded with SEPARATE pairs of backticks, e.g.: `catalog_name`.`schema_name` NOT `catalog_name.schema_name`.
-    - You must keep all original catalog, schema, table, and field names.
-    - Convert all dates to dd-MMM-yyyy format using the date_format() function. 
-    - The date_format() function should not be surrounded by backticks.
-    - Subqueries must end with a semicolon.
-    - ONLY if the original query uses temporary tables (e.g. "INTO #temptable"), re-write these as either CREATE OR REPLACE TEMPORARY VIEW or CTEs. 
-    - Custom field names should be surrounded by backticks.
-    - Square brackets must also be replaced with backticks.
-    - Only if the original query contains DECLARE and SET statements, re-write them according to the following format:
+    • You may only reply with SQL code with no other text. 
+    • References to a schema within a catalog are in the format catalog.schema. For example: `catalog_name`.`schema_name` when 'catalog_name' is the catalog and 'schema_name' is the schema. The catalog and schema MUST be surrounded with SEPARATE pairs of backticks, e.g.: `catalog_name`.`schema_name` NOT `catalog_name.schema_name`.
+    • You must keep all original catalog, schema, table, and field names.
+    • Convert all dates to dd-MMM-yyyy format using the date_format() function. 
+    • The date_format() function should not be surrounded by backticks.
+    • Subqueries must end with a semicolon.
+    • ONLY if the original query uses temporary tables (e.g. "INTO #temptable"), re-write these as either CREATE OR REPLACE TEMPORARY VIEW or CTEs. 
+    • Custom field names should be surrounded by backticks.
+    • Square brackets must also be replaced with backticks.
+    • Only if the original query contains DECLARE and SET statements, re-write them according to the following format:
         DECLARE VARIABLE variable TYPE DEFAULT value; For example: DECLARE VARIABLE number INT DEFAULT 9;
         SET VAR variable = value; For example: SET VAR number = 9;
-    - Ensure queries do not have # or @ symbols. 
+    • Ensure queries do not have # or @ symbols. 
     """.strip()
 
 original_translation_system_prompt = rules + "\nTranslate the following Transact SQL query to Databricks Spark SQL:"
@@ -248,8 +248,8 @@ def llm_intent(sql_query = None):
 # SAVING INTENT AND CODE
 ################################################################################
 # this writes the code & intent into the lookup table
-def save_intent(code, intent):
-    code_hash = hash(code) # Change to combination of code + intent?    
+def save_intent(t_code, spark_code, intent):
+    code_hash = hash(t_code) # Change to combination of code + intent?    
     intent = intent.replace("\"", "\'") # Replace any double quotation marks with single quotations to avoid syntax errors when writing to table.
     logger.warning(f"Intent: {intent}")
     
@@ -258,7 +258,7 @@ def save_intent(code, intent):
     logger.warning(existing_id)
 
     if not existing_id:
-        cursor.execute(f"INSERT INTO {intent_table} VALUES ({code_hash}, \"{code}\", \"{intent}\")")
+        cursor.execute(f"INSERT INTO {intent_table} VALUES ({code_hash}, \"{t_code}\", \"{spark_code}\",\"{intent}\")")
         gr.Info("Code and intent saved to catalog")
     else:
         raise gr.Error("Identical code found in the table")
@@ -268,15 +268,12 @@ def save_intent(code, intent):
 ################################################################################
 # this does a look up on the vector store to find the most similar code based on the intent
 def get_similar_code(intent):    
-    #intent = intent[0][-1] # Extracts just the intent explanation, without the mention of original code
-    
-    #results = vsc.get_index(VECTOR_SEARCH_ENDPOINT_NAME, vs_index_fullname).similarity_search(
     results = vsc.get_index("", vs_index_fullname).similarity_search(
     query_text=intent,
-    columns=["code", "intent"],
+    columns=["t_sql_code", "spark_sql_code", "intent"],
     num_results=1)
     docs = results.get('result', {}).get('data_array', [])
-    return(docs[0][0], docs[0][1])
+    return(docs[0][0], docs[0][1], docs[0][2])
 
 ################################################################################
 # REFINING CODE BASED ON USER REQUESTS
@@ -538,7 +535,7 @@ This application uses the DBRX-instruct LLM model to translate Transact SQL quer
         # Button behaviours
         clear.click(fn = reset_intent_chat)
         submit.click(saving_popup) 
-        submit.click(save_intent, inputs=[input_code, explained]) # Maybe use translated code instead of input
+        submit.click(save_intent, inputs=[input_code, translated, explained]) 
 
 ################################################################################
 #### SIMILAR CODE PANE
@@ -553,16 +550,22 @@ This application uses the DBRX-instruct LLM model to translate Transact SQL quer
         find_similar_code=gr.Button("Find similar code")
         # a row with an code and text box to show the similar code
         with gr.Row():
-            similar_code = gr.Code(
-                label="Similar code to yours."
-                ,language="sql-sparkSQL"
+            similar_t_code = gr.Code(
+                label="Similar T-SQL code to yours",
+                language="sql-msSQL"
                 )
+            
+            similar_spark_code = gr.Code(
+                label = "Spark SQL version of the code",
+                language = "sql-sparkSQL"
+            )
+
             similar_intent = gr.Textbox(label="The similar codes intent.")      
         
     find_similar_code.click(
         fn=get_similar_code
         , inputs=explained
-        , outputs=[similar_code, similar_intent])
+        , outputs=[similar_t_code, similar_spark_code, similar_intent])
     
 
 ################################################################################
